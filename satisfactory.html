@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Satisfactory 2D Layout Planner</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { font-family: 'Inter', sans-serif; overscroll-behavior: none; }
+        #canvas-container { cursor: grab; background-color: #1A202C; }
+        #canvas-container:active { cursor: grabbing; }
+        #layout-canvas { width: 100%; height: 100%; display: block; }
+        .btn {
+            background-color: #4A5568; padding: 8px 16px; border-radius: 8px; font-weight: 600;
+            transition: background-color 0.2s;
+        }
+        .btn:hover { background-color: #718096; }
+        .machine-icon { cursor: grab; transition: transform 0.2s ease-in-out, box-shadow 0.2s ease-in-out; }
+        .machine-icon:active { cursor: grabbing; }
+        .machine-icon:hover { transform: scale(1.05); box-shadow: 0 0 15px rgba(250, 204, 21, 0.5); }
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #1A202C; }
+        ::-webkit-scrollbar-thumb { background: #4A5568; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #718096; }
+        #properties-panel { transition: transform 0.3s ease-in-out; }
+    </style>
+</head>
+<body class="bg-gray-900 text-white h-screen flex flex-col">
+
+    <header class="bg-gray-800 shadow-lg z-20">
+        <div class="container mx-auto px-6 py-3 flex justify-between items-center">
+            <div>
+                <h1 class="text-2xl font-bold text-amber-400">Satisfactory 2D Layout Planner</h1>
+                <p class="text-sm text-gray-400">Phase 6: Save/Load, More Content & Advanced Calculations</p>
+            </div>
+            <div class="flex space-x-4">
+                <button id="save-btn" class="btn">Save</button>
+                <button id="load-btn" class="btn">Load</button>
+                <input type="file" id="load-input" class="hidden" accept=".json">
+            </div>
+        </div>
+    </header>
+
+    <div class="flex-1 flex overflow-hidden">
+        <aside class="w-72 bg-gray-800 p-4 shadow-lg flex-shrink-0 z-10 flex flex-col">
+            <div class="overflow-y-auto">
+                <h2 class="text-lg font-semibold mb-4 border-b border-gray-700 pb-2">Machines</h2>
+                <div id="machine-sidebar-content"></div>
+            </div>
+            <div class="mt-auto pt-4 border-t border-gray-700">
+                <h2 class="text-lg font-semibold mb-2">Factory Net Balance</h2>
+                <div id="summary-panel" class="text-sm space-y-1"></div>
+            </div>
+        </aside>
+
+        <main id="canvas-container" class="flex-1 flex flex-col bg-gray-900 overflow-hidden relative">
+             <canvas id="layout-canvas"></canvas>
+        </main>
+
+        <aside id="properties-panel" class="w-80 bg-gray-800 p-4 overflow-y-auto shadow-lg flex-shrink-0 transform translate-x-full z-10">
+             <h2 class="text-lg font-semibold mb-4 border-b border-gray-700 pb-2">Properties</h2>
+             <div id="properties-content"><p class="text-gray-400">Select a machine.</p></div>
+        </aside>
+    </div>
+
+    <script>
+    // --- Phase 6: Major Upgrade ---
+    const canvas = document.getElementById('layout-canvas'), ctx = canvas.getContext('2d');
+    const container = document.getElementById('canvas-container');
+    let camera = { x: 0, y: 0, zoom: 1 }, grid_size = 20;
+    let placedMachines = [], connections = [];
+    let selectedItem = null, hoveredNode = null; // Can be a machine or a connection
+    let actionState = { type: 'none' };
+    let lastMousePos = { x: 0, y: 0 };
+    const machineImages = {};
+
+    const beltData = {
+        'Mk.1': { speed: 60, color: '#A0AEC0' }, 'Mk.2': { speed: 120, color: '#4299E1' },
+        'Mk.3': { speed: 270, color: '#68D391' }, 'Mk.4': { speed: 480, color: '#F6E05E' },
+        'Mk.5': { speed: 780, color: '#F56565' },
+    };
+
+    const machineData = {
+        Extraction: {
+            'Miner Mk.1': { width: 80, height: 120, icon: 'https://placehold.co/80x120/718096/FFFFFF?text=Miner', inputs:[], outputs: [{ x: 40, y: 120 }], recipes: [ { name: 'Iron Ore', power: 5, outputs: [{ item: 'Iron Ore', rate: 60 }] }, { name: 'Copper Ore', power: 5, outputs: [{ item: 'Copper Ore', rate: 60 }] } ] },
+            'Water Extractor': { width: 120, height: 80, icon: 'https://placehold.co/120x80/4299E1/FFFFFF?text=Water', inputs:[], outputs: [{ x: 60, y: 80 }], recipes: [ { name: 'Water', power: 20, outputs: [{ item: 'Water', rate: 120 }] } ] },
+        },
+        Production: {
+            'Smelter': { width: 80, height: 100, icon: 'https://placehold.co/80x100/EA580C/FFFFFF?text=Smelter', inputs: [{ x: 40, y: 0 }], outputs: [{ x: 40, y: 100 }], recipes: [ { name: 'Iron Ingot', power: 4, inputs: [{ item: 'Iron Ore', rate: 30 }], outputs: [{ item: 'Iron Ingot', rate: 30 }] }, { name: 'Copper Ingot', power: 4, inputs: [{ item: 'Copper Ore', rate: 30 }], outputs: [{ item: 'Copper Ingot', rate: 30 }] },] },
+            'Constructor': { width: 80, height: 80, icon: 'https://placehold.co/80x80/0EA5E9/FFFFFF?text=Constr', inputs: [{ x: 0, y: 40 }], outputs: [{ x: 80, y: 40 }], recipes: [ { name: 'Iron Plate', power: 4, inputs: [{ item: 'Iron Ingot', rate: 30 }], outputs: [{ item: 'Iron Plate', rate: 20 }] }, { name: 'Iron Rod', power: 4, inputs: [{ item: 'Iron Ingot', rate: 15 }], outputs: [{ item: 'Iron Rod', rate: 15 }] }, { name: 'Wire', power: 4, inputs: [{ item: 'Copper Ingot', rate: 15 }], outputs: [{ item: 'Wire', rate: 30 }] }, { name: 'Screw', power: 4, inputs: [{ item: 'Iron Rod', rate: 10 }], outputs: [{ item: 'Screw', rate: 40 }] } ] },
+            'Assembler': { width: 100, height: 120, icon: 'https://placehold.co/100x120/14B8A6/FFFFFF?text=Assem', inputs: [{ x: 0, y: 30 }, { x: 0, y: 90 }], outputs: [{ x: 100, y: 60 }], recipes: [ { name: 'Reinforced Iron Plate', power: 15, inputs: [{ item: 'Iron Plate', rate: 30 }, { item: 'Screw', rate: 60 }], outputs: [{ item: 'Reinforced Iron Plate', rate: 5 }] }, { name: 'Rotor', power: 15, inputs: [{ item: 'Iron Rod', rate: 20 }, { item: 'Screw', rate: 100 }], outputs: [{ item: 'Rotor', rate: 4 }] } ] },
+        },
+        Logistics: {
+            'ConveyorSplitter': { width: 40, height: 40, icon: 'https://placehold.co/40x40/6B7280/FFFFFF?text=Split', inputs: [{ x: 20, y: 0 }], outputs: [{ x: 0, y: 40 }, { x: 20, y: 40 }, { x: 40, y: 40 }], recipes: [] },
+            'ConveyorMerger': { width: 40, height: 40, icon: 'https://placehold.co/40x40/6B7280/FFFFFF?text=Merge', inputs: [{ x: 0, y: 0 }, { x: 20, y: 0 }, { x: 40, y: 0 }], outputs: [{ x: 20, y: 40 }], recipes: [] },
+        }
+    };
+
+    class Machine {
+        constructor(config) {
+            const data = Object.values(machineData).flatMap(cat => Object.entries(cat)).find(([key,]) => key === config.type)[1];
+            this.id = config.id || Date.now() + Math.random();
+            this.type = config.type;
+            this.x = config.x; this.y = config.y;
+            this.rotation = config.rotation || 0;
+            this.width = data.width; this.height = data.height;
+            // FIX: Make node IDs deterministic for reliable saving/loading
+            this.inputs = data.inputs.map((n, i) => ({ ...n, id: `${this.id}-in-${i}`, parentId: this.id, type: 'input' }));
+            this.outputs = data.outputs.map((n, i) => ({ ...n, id: `${this.id}-out-${i}`, parentId: this.id, type: 'output' }));
+            this.recipes = data.recipes || [];
+            if (config.selectedRecipeName) {
+                this.selectedRecipe = this.recipes.find(r => r.name === config.selectedRecipeName) || null;
+            } else {
+                this.selectedRecipe = this.recipes.length > 0 ? this.recipes[0] : null;
+            }
+        }
+
+        draw(ctx) {
+            ctx.save();
+            const centerX = this.x + this.width / 2, centerY = this.y + this.height / 2;
+            ctx.translate(centerX, centerY); ctx.rotate(this.rotation); ctx.translate(-centerX, -centerY);
+            const img = machineImages[this.type];
+            if (img && img.complete) { ctx.drawImage(img, this.x, this.y, this.width, this.height); } 
+            else {
+                ctx.fillStyle = '#A0AEC0'; ctx.fillRect(this.x, this.y, this.width, this.height);
+                ctx.fillStyle = 'black'; ctx.textAlign = 'center';
+                ctx.fillText(this.type, this.x + this.width / 2, this.y + this.height / 2);
+            }
+            ctx.restore();
+            if (selectedItem === this) {
+                ctx.strokeStyle = '#FBBF24'; ctx.lineWidth = 3;
+                ctx.strokeRect(this.x - 2, this.y - 2, this.width + 4, this.height + 4);
+            }
+            this.getAllNodes().forEach(node => this.drawNode(ctx, node));
+        }
+        
+        drawNode(ctx, node) {
+            const pos = this.getRotatedNodePosition(node);
+            ctx.fillStyle = node.type === 'input' ? '#3B82F6' : '#F97316';
+            if (hoveredNode && hoveredNode.id === node.id) ctx.fillStyle = '#FBBF24';
+            ctx.beginPath(); ctx.arc(pos.x, pos.y, 8, 0, 2 * Math.PI); ctx.fill();
+        }
+
+        getRotatedNodePosition(node) {
+            const centerX = this.x + this.width / 2, centerY = this.y + this.height / 2;
+            const nodeX = this.x + node.x, nodeY = this.y + node.y;
+            const dx = nodeX - centerX, dy = nodeY - centerY;
+            const newX = dx * Math.cos(this.rotation) - dy * Math.sin(this.rotation);
+            const newY = dx * Math.sin(this.rotation) + dy * Math.cos(this.rotation);
+            return { x: centerX + newX, y: centerY + newY };
+        }
+
+        isClicked(worldX, worldY) { return worldX >= this.x && worldX <= this.x + this.width && worldY >= this.y && worldY <= this.y + this.height; }
+        
+        getNodeAt(worldX, worldY) {
+            for (const node of this.getAllNodes()) {
+                const pos = this.getRotatedNodePosition(node);
+                const dx = pos.x - worldX, dy = pos.y - worldY;
+                if (dx * dx + dy * dy < 8 * 8) return node;
+            }
+            return null;
+        }
+
+        getAllNodes() { return [...this.inputs, ...this.outputs]; }
+        rotate() { this.rotation = (this.rotation + Math.PI / 2) % (2 * Math.PI); }
+    }
+    
+    const snapToGrid = (value) => Math.round(value / grid_size) * grid_size;
+    const screenToWorld = (x, y) => ({ x: x / camera.zoom + camera.x, y: y / camera.zoom + camera.y });
+
+    function redrawCanvas() {
+        if(!container.clientWidth || !container.clientHeight) return;
+        canvas.width = container.clientWidth; canvas.height = container.clientHeight;
+        ctx.save(); ctx.scale(camera.zoom, camera.zoom); ctx.translate(-camera.x, -camera.y);
+        
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.07)"; ctx.lineWidth = 1;
+        const viewLeft = camera.x, viewTop = camera.y;
+        const viewRight = camera.x + canvas.width / camera.zoom;
+        const viewBottom = camera.y + canvas.height / camera.zoom;
+        const startX = Math.floor(viewLeft / grid_size) * grid_size;
+        const startY = Math.floor(viewTop / grid_size) * grid_size;
+        for (let x = startX; x < viewRight; x += grid_size) {
+            ctx.beginPath(); ctx.moveTo(x, viewTop); ctx.lineTo(x, viewBottom); ctx.stroke();
+        }
+        for (let y = startY; y < viewBottom; y += grid_size) {
+            ctx.beginPath(); ctx.moveTo(viewLeft, y); ctx.lineTo(viewRight, y); ctx.stroke();
+        }
+
+        connections.forEach(c => {
+            // FIX: Find the parent machine from the node's parentId before drawing
+            const startMachine = placedMachines.find(m => m.id === c.start.parentId);
+            const endMachine = placedMachines.find(m => m.id === c.end.parentId);
+            if (!startMachine || !endMachine) return; // Failsafe if a machine is deleted
+
+            const startPos = startMachine.getRotatedNodePosition(c.start);
+            const endPos = endMachine.getRotatedNodePosition(c.end);
+            ctx.beginPath(); ctx.moveTo(startPos.x, startPos.y); ctx.lineTo(endPos.x, endPos.y);
+            ctx.strokeStyle = (selectedItem === c) ? '#FBBF24' : (beltData[c.tier]?.color || '#A0AEC0');
+            ctx.lineWidth = 6; ctx.stroke();
+        });
+
+        placedMachines.forEach(machine => machine.draw(ctx));
+
+        if (actionState.type === 'connecting') {
+             // FIX: Find the parent machine for the starting node
+            const startMachine = placedMachines.find(m => m.id === actionState.startNode.parentId);
+            if(startMachine) {
+                const startPos = startMachine.getRotatedNodePosition(actionState.startNode);
+                ctx.beginPath(); ctx.moveTo(startPos.x, startPos.y); ctx.lineTo(actionState.endX, actionState.endY);
+                ctx.strokeStyle = '#FBBF24'; ctx.lineWidth = 4; ctx.setLineDash([10, 5]); ctx.stroke(); ctx.setLineDash([]);
+            }
+        }
+        
+        ctx.restore();
+    }
+
+    function calculateFactoryStats() {
+        const balance = {};
+        let totalPower = 0;
+        placedMachines.forEach(machine => {
+            if (machine.selectedRecipe) {
+                const recipe = machine.selectedRecipe;
+                totalPower += recipe.power || 0;
+                recipe.inputs?.forEach(input => { balance[input.item] = (balance[input.item] || 0) - input.rate; });
+                recipe.outputs?.forEach(output => { balance[output.item] = (balance[output.item] || 0) + output.rate; });
+            }
+        });
+        return { totalPower, balance };
+    }
+
+    function updateSummaryPanel() {
+        const panel = document.getElementById('summary-panel');
+        if (placedMachines.length === 0) {
+            panel.innerHTML = '<p class="text-gray-400">Build a factory to see stats.</p>';
+            return;
+        }
+        const { totalPower, balance } = calculateFactoryStats();
+        let html = `<div class="flex justify-between items-center"><span class="font-bold text-amber-400">Power:</span><span class="font-semibold">${totalPower.toFixed(1)} MW</span></div>`;
+        const sortedBalance = Object.entries(balance).sort((a,b) => a[0].localeCompare(b[0]));
+        if (sortedBalance.length > 0) {
+            html += '<h3 class="font-bold text-gray-300 mt-2">Net Balance (/min)</h3>';
+            sortedBalance.forEach(([item, rate]) => {
+                const color = rate > 0 ? 'text-green-400' : 'text-red-400';
+                const sign = rate > 0 ? '+' : '';
+                html += `<div class="flex justify-between ${color}"><span>${item}</span><span>${sign}${rate.toFixed(1)}</span></div>`;
+            });
+        }
+        panel.innerHTML = html;
+    }
+
+    function updatePropertiesPanel() {
+        const panel = document.getElementById('properties-panel');
+        const content = document.getElementById('properties-content');
+        if (!selectedItem) {
+            content.innerHTML = '<p class="text-gray-400">Select an item.</p>';
+            panel.classList.add('translate-x-full');
+            return;
+        }
+
+        if (selectedItem instanceof Machine) {
+            let recipeOptions = '<option value="">Select Recipe...</option>';
+            if (selectedItem.recipes.length > 0) {
+                recipeOptions = selectedItem.recipes.map(r => 
+                    `<option value="${r.name}" ${selectedItem.selectedRecipe && selectedItem.selectedRecipe.name === r.name ? 'selected' : ''}>${r.name}</option>`
+                ).join('');
+            }
+            content.innerHTML = `
+                <h3 class="font-bold text-lg text-amber-300">${selectedItem.type}</h3>
+                <div class="mt-4"><label class="block text-sm font-medium">Position (X, Y)</label><p>${Math.round(selectedItem.x)}, ${Math.round(selectedItem.y)}</p></div>
+                <div class="mt-4"><label for="recipe-select" class="block text-sm font-medium">Recipe</label><select id="recipe-select" class="w-full bg-gray-700 border border-gray-600 rounded-md p-2 mt-1">${recipeOptions}</select></div>
+                <div class="flex space-x-2 mt-6">
+                    <button id="rotate-machine-btn" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded">Rotate</button>
+                    <button id="delete-btn" class="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded">Delete</button>
+                </div>`;
+            
+            document.getElementById('rotate-machine-btn').onclick = () => { selectedItem.rotate(); redrawCanvas(); };
+            document.getElementById('recipe-select').onchange = (e) => {
+                selectedItem.selectedRecipe = selectedItem.recipes.find(r => r.name === e.target.value) || null;
+                updateSummaryPanel();
+            };
+        } else { // It's a connection
+            const beltOptions = Object.keys(beltData).map(tier => 
+                `<option value="${tier}" ${selectedItem.tier === tier ? 'selected' : ''}>${tier} (${beltData[tier].speed}/min)</option>`
+            ).join('');
+            content.innerHTML = `
+                <h3 class="font-bold text-lg text-amber-300">Conveyor Belt</h3>
+                <div class="mt-4"><label for="belt-tier-select" class="block text-sm font-medium">Tier</label><select id="belt-tier-select" class="w-full bg-gray-700 border border-gray-600 rounded-md p-2 mt-1">${beltOptions}</select></div>
+                <button id="delete-btn" class="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded mt-6">Delete Connection</button>`;
+            
+            document.getElementById('belt-tier-select').onchange = (e) => {
+                selectedItem.tier = e.target.value;
+                redrawCanvas();
+            };
+        }
+
+        document.getElementById('delete-btn').onclick = () => {
+            if (selectedItem instanceof Machine) {
+                connections = connections.filter(c => c.start.parentId !== selectedItem.id && c.end.parentId !== selectedItem.id);
+                placedMachines = placedMachines.filter(m => m.id !== selectedItem.id);
+            } else {
+                connections = connections.filter(c => c !== selectedItem);
+            }
+            selectedItem = null;
+            updatePropertiesPanel();
+            redrawCanvas();
+            updateSummaryPanel();
+        };
+
+        panel.classList.remove('translate-x-full');
+    }
+
+    canvas.addEventListener('mousedown', (e) => {
+        const worldPos = screenToWorld(e.offsetX, e.offsetY);
+        lastMousePos = { x: e.offsetX, y: e.offsetY };
+        let machineClicked = null, nodeClicked = null;
+        
+        for (let i = placedMachines.length - 1; i >= 0; i--) {
+            nodeClicked = placedMachines[i].getNodeAt(worldPos.x, worldPos.y);
+            if (nodeClicked) break;
+            if (placedMachines[i].isClicked(worldPos.x, worldPos.y)) {
+                machineClicked = placedMachines[i];
+                break;
+            }
+        }
+
+        if (nodeClicked) { actionState = { type: 'connecting', startNode: nodeClicked, endX: worldPos.x, endY: worldPos.y }; } 
+        else if (machineClicked) { selectedItem = machineClicked; actionState = { type: 'dragging', machine: machineClicked, offsetX: worldPos.x - machineClicked.x, offsetY: worldPos.y - machineClicked.y }; } 
+        else { selectedItem = null; actionState = { type: 'panning' }; }
+        updatePropertiesPanel();
+        redrawCanvas();
+    });
+
+    canvas.addEventListener('mousemove', (e) => {
+        const worldPos = screenToWorld(e.offsetX, e.offsetY);
+        if (actionState.type === 'panning') {
+            const dx = e.offsetX - lastMousePos.x; const dy = e.offsetY - lastMousePos.y;
+            camera.x -= dx / camera.zoom; camera.y -= dy / camera.zoom;
+        } else if (actionState.type === 'dragging') {
+            actionState.machine.x = snapToGrid(worldPos.x - actionState.offsetX);
+            actionState.machine.y = snapToGrid(worldPos.y - actionState.offsetY);
+        } else if (actionState.type === 'connecting') {
+            actionState.endX = worldPos.x; actionState.endY = worldPos.y;
+        }
+        let foundNode = null;
+        for (const machine of placedMachines) {
+            const node = machine.getNodeAt(worldPos.x, worldPos.y);
+            if (node) { foundNode = node; break; }
+        }
+        if (hoveredNode !== foundNode) hoveredNode = foundNode;
+        lastMousePos = { x: e.offsetX, y: e.offsetY };
+        redrawCanvas();
+    });
+
+    canvas.addEventListener('mouseup', (e) => {
+        const worldPos = screenToWorld(e.offsetX, e.offsetY);
+        if (actionState.type === 'connecting') {
+            let endNode = null;
+            for (const machine of placedMachines) {
+                const node = machine.getNodeAt(worldPos.x, worldPos.y);
+                if (node) { endNode = node; break; }
+            }
+            if (endNode && endNode.parentId !== actionState.startNode.parentId && endNode.type !== actionState.startNode.type) {
+                connections.push({ start: actionState.startNode, end: endNode, tier: 'Mk.1' });
+            }
+        }
+        actionState = { type: 'none' };
+        redrawCanvas();
+    });
+    
+    const machineSidebarContent = document.getElementById('machine-sidebar-content');
+    function populateMachineSidebar() {
+        for (const category in machineData) {
+            const catHeader = document.createElement('h3');
+            catHeader.className = 'text-md font-semibold text-amber-300 mt-4 mb-2';
+            catHeader.textContent = category;
+            machineSidebarContent.appendChild(catHeader);
+            const listDiv = document.createElement('div');
+            listDiv.className = 'space-y-3';
+            for (const type in machineData[category]) {
+                const data = machineData[category][type];
+                const iconDiv = document.createElement('div');
+                iconDiv.className = 'machine-icon bg-gray-700 p-3 rounded-lg flex items-center space-x-3';
+                iconDiv.draggable = true;
+                iconDiv.dataset.machineType = type;
+                iconDiv.innerHTML = `<img src="${data.icon}" class="w-10 h-10 object-contain"><h3 class="font-bold">${type}</h3>`;
+                listDiv.appendChild(iconDiv);
+            }
+            machineSidebarContent.appendChild(listDiv);
+        }
+        addDragStartListeners();
+    }
+    
+    function addDragStartListeners() {
+        machineSidebarContent.querySelectorAll('.machine-icon').forEach(icon => {
+            icon.addEventListener('dragstart', (e) => { e.dataTransfer.setData('text/plain', e.currentTarget.dataset.machineType); });
+        });
+    }
+
+    container.addEventListener('dragover', (e) => e.preventDefault());
+    container.addEventListener('drop', (e) => {
+        e.preventDefault();
+        const type = e.dataTransfer.getData('text/plain');
+        const machineInfo = Object.values(machineData).flatMap(cat => Object.entries(cat)).find(([key,]) => key === type);
+        if (machineInfo) {
+            const worldPos = screenToWorld(e.offsetX, e.offsetY);
+            const newMachine = new Machine({type: type, x: snapToGrid(worldPos.x), y: snapToGrid(worldPos.y)});
+            placedMachines.push(newMachine);
+            redrawCanvas();
+            updateSummaryPanel();
+        }
+    });
+
+    const saveBtn = document.getElementById('save-btn');
+    const loadBtn = document.getElementById('load-btn');
+    const loadInput = document.getElementById('load-input');
+
+    saveBtn.addEventListener('click', () => {
+        const saveData = {
+            machines: placedMachines.map(m => ({
+                id: m.id, type: m.type, x: m.x, y: m.y, rotation: m.rotation,
+                selectedRecipeName: m.selectedRecipe ? m.selectedRecipe.name : null
+            })),
+            connections: connections.map(c => ({
+                startNodeId: c.start.id, endNodeId: c.end.id, tier: c.tier
+            })),
+            camera: camera
+        };
+        const blob = new Blob([JSON.stringify(saveData, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `satisfactory-layout-${Date.now()}.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+    });
+
+    loadBtn.addEventListener('click', () => loadInput.click());
+    loadInput.addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = (event) => {
+            try {
+                const saveData = JSON.parse(event.target.result);
+                placedMachines = saveData.machines.map(m => new Machine(m));
+                connections = saveData.connections.map(c => {
+                    let startNode = null, endNode = null;
+                    for (const machine of placedMachines) {
+                        if (!startNode) startNode = machine.getAllNodes().find(n => n.id === c.startNodeId);
+                        if (!endNode) endNode = machine.getAllNodes().find(n => n.id === c.endNodeId);
+                        if (startNode && endNode) break;
+                    }
+                    return startNode && endNode ? { start: startNode, end: endNode, tier: c.tier } : null;
+                }).filter(Boolean);
+                camera = saveData.camera;
+                redrawCanvas();
+                updateSummaryPanel();
+            } catch (err) {
+                console.error("Error loading file:", err);
+                alert("Failed to load layout. The file may be corrupt.");
+            }
+        };
+        reader.readAsText(file);
+        e.target.value = '';
+    });
+
+    function loadImages(callback) {
+        let loadedCount = 0;
+        const allMachines = Object.values(machineData).flatMap(cat => Object.entries(cat));
+        const totalImages = allMachines.length;
+        if (totalImages === 0) { callback(); return; }
+        allMachines.forEach(([type, data]) => {
+            const img = new Image();
+            img.crossOrigin = "anonymous";
+            img.src = data.icon;
+            img.onload = () => { machineImages[type] = img; loadedCount++; if (loadedCount === totalImages) callback(); };
+            img.onerror = () => { console.error(`Failed to load image for ${type}`); machineImages[type] = null; loadedCount++; if (loadedCount === totalImages) callback(); };
+        });
+    }
+
+    window.addEventListener('load', () => {
+        loadImages(() => {
+            populateMachineSidebar();
+            setTimeout(() => {
+                camera.x = -container.clientWidth / 2;
+                camera.y = -container.clientHeight / 2;
+                redrawCanvas();
+                updateSummaryPanel();
+            }, 100);
+        });
+    });
+    window.addEventListener('resize', redrawCanvas);
+
+    </script>
+</body>
+</html>
