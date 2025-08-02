@@ -23,7 +23,6 @@
         ::-webkit-scrollbar-track { background: #1A202C; }
         ::-webkit-scrollbar-thumb { background: #4A5568; border-radius: 4px; }
         ::-webkit-scrollbar-thumb:hover { background: #718096; }
-        #properties-panel { transition: transform 0.3s ease-in-out; }
     </style>
 </head>
 <body class="bg-gray-900 text-white h-screen flex flex-col">
@@ -58,7 +57,7 @@
              <canvas id="layout-canvas"></canvas>
         </main>
 
-        <aside id="properties-panel" class="w-80 bg-gray-800 p-4 overflow-y-auto shadow-lg flex-shrink-0 z-10">
+        <aside id="properties-panel" class="w-80 bg-gray-800 p-4 overflow-y-auto shadow-lg flex-shrink-0 z-10 hidden">
              <h2 class="text-lg font-semibold mb-4 border-b border-gray-700 pb-2">Properties</h2>
              <div id="properties-content"><p class="text-gray-400">Select a machine.</p></div>
         </aside>
@@ -68,7 +67,6 @@
     // --- Phase 6: Major Upgrade ---
     const canvas = document.getElementById('layout-canvas'), ctx = canvas.getContext('2d');
     const container = document.getElementById('canvas-container');
-    const mainFlexContainer = document.getElementById('main-flex-container');
     const propertiesPanel = document.getElementById('properties-panel');
 
     let camera = { x: 0, y: 0, zoom: 1 }, grid_size = 20;
@@ -268,11 +266,11 @@
 
     function updatePropertiesPanel() {
         if (!selectedItem) {
-            propertiesPanel.style.transform = 'translateX(100%)';
-            mainFlexContainer.style.paddingRight = '0';
+            propertiesPanel.classList.add('hidden');
             return;
         }
 
+        propertiesPanel.classList.remove('hidden');
         const content = document.getElementById('properties-content');
         if (selectedItem instanceof Machine) {
             let recipeOptions = '<option value="">Select Recipe...</option>';
@@ -322,9 +320,6 @@
             redrawCanvas();
             updateSummaryPanel();
         };
-
-        propertiesPanel.style.transform = 'translateX(0)';
-        mainFlexContainer.style.paddingRight = `${propertiesPanel.offsetWidth}px`;
     }
 
     canvas.addEventListener('mousedown', (e) => {
@@ -378,7 +373,7 @@
                 if (node) { endNode = node; break; }
             }
             if (endNode && endNode.parentId !== actionState.startNode.parentId && endNode.type !== actionState.startNode.type) {
-                connections.push({ start: actionState.startNode, end: endNode, tier: 'Mk.1' });
+                connections.push({ start: endNode, end: actionState.startNode, tier: 'Mk.1' });
             }
         }
         actionState = { type: 'none' };
@@ -515,9 +510,6 @@
     });
     window.addEventListener('resize', () => {
         redrawCanvas();
-        if (!propertiesPanel.classList.contains('translate-x-full')) {
-             mainFlexContainer.style.paddingRight = `${propertiesPanel.offsetWidth}px`;
-        }
     });
 
     </script>
