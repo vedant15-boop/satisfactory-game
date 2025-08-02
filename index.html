@@ -42,7 +42,7 @@
         </div>
     </header>
 
-    <div class="flex-1 flex overflow-hidden">
+    <div id="main-flex-container" class="flex-1 flex overflow-hidden">
         <aside class="w-72 bg-gray-800 p-4 shadow-lg flex-shrink-0 z-10 flex flex-col">
             <div class="overflow-y-auto">
                 <h2 class="text-lg font-semibold mb-4 border-b border-gray-700 pb-2">Machines</h2>
@@ -58,7 +58,7 @@
              <canvas id="layout-canvas"></canvas>
         </main>
 
-        <aside id="properties-panel" class="w-80 bg-gray-800 p-4 overflow-y-auto shadow-lg flex-shrink-0 transform translate-x-full z-10">
+        <aside id="properties-panel" class="w-80 bg-gray-800 p-4 overflow-y-auto shadow-lg flex-shrink-0 z-10">
              <h2 class="text-lg font-semibold mb-4 border-b border-gray-700 pb-2">Properties</h2>
              <div id="properties-content"><p class="text-gray-400">Select a machine.</p></div>
         </aside>
@@ -68,17 +68,35 @@
     // --- Phase 6: Major Upgrade ---
     const canvas = document.getElementById('layout-canvas'), ctx = canvas.getContext('2d');
     const container = document.getElementById('canvas-container');
+    const mainFlexContainer = document.getElementById('main-flex-container');
+    const propertiesPanel = document.getElementById('properties-panel');
+
     let camera = { x: 0, y: 0, zoom: 1 }, grid_size = 20;
     let placedMachines = [], connections = [];
-    let selectedItem = null, hoveredNode = null; // Can be a machine or a connection
+    let selectedItem = null, hoveredNode = null; 
     let actionState = { type: 'none' };
     let lastMousePos = { x: 0, y: 0 };
     const machineImages = {};
+    const itemImages = {};
 
     const beltData = {
         'Mk.1': { speed: 60, color: '#A0AEC0' }, 'Mk.2': { speed: 120, color: '#4299E1' },
         'Mk.3': { speed: 270, color: '#68D391' }, 'Mk.4': { speed: 480, color: '#F6E05E' },
         'Mk.5': { speed: 780, color: '#F56565' },
+    };
+    
+    const itemData = {
+        'Iron Ore': { icon: 'https://placehold.co/32x32/718096/FFFFFF?text=Fe' },
+        'Copper Ore': { icon: 'https://placehold.co/32x32/D69E2E/FFFFFF?text=Cu' },
+        'Water': { icon: 'https://placehold.co/32x32/4299E1/FFFFFF?text=H2O' },
+        'Iron Ingot': { icon: 'https://placehold.co/32x32/A0AEC0/FFFFFF?text=Fe' },
+        'Copper Ingot': { icon: 'https://placehold.co/32x32/ED8936/FFFFFF?text=Cu' },
+        'Iron Plate': { icon: 'https://placehold.co/32x32/E2E8F0/FFFFFF?text=Pl' },
+        'Iron Rod': { icon: 'https://placehold.co/32x32/CBD5E0/FFFFFF?text=Rd' },
+        'Wire': { icon: 'https://placehold.co/32x32/F6AD55/FFFFFF?text=Wi' },
+        'Screw': { icon: 'https://placehold.co/32x32/718096/FFFFFF?text=Sc' },
+        'Reinforced Iron Plate': { icon: 'https://placehold.co/32x32/4A5568/FFFFFF?text=RIP' },
+        'Rotor': { icon: 'https://placehold.co/32x32/F6E05E/FFFFFF?text=Ro' },
     };
 
     const machineData = {
@@ -105,7 +123,6 @@
             this.x = config.x; this.y = config.y;
             this.rotation = config.rotation || 0;
             this.width = data.width; this.height = data.height;
-            // FIX: Make node IDs deterministic for reliable saving/loading
             this.inputs = data.inputs.map((n, i) => ({ ...n, id: `${this.id}-in-${i}`, parentId: this.id, type: 'input' }));
             this.outputs = data.outputs.map((n, i) => ({ ...n, id: `${this.id}-out-${i}`, parentId: this.id, type: 'output' }));
             this.recipes = data.recipes || [];
@@ -188,10 +205,9 @@
         }
 
         connections.forEach(c => {
-            // FIX: Find the parent machine from the node's parentId before drawing
             const startMachine = placedMachines.find(m => m.id === c.start.parentId);
             const endMachine = placedMachines.find(m => m.id === c.end.parentId);
-            if (!startMachine || !endMachine) return; // Failsafe if a machine is deleted
+            if (!startMachine || !endMachine) return; 
 
             const startPos = startMachine.getRotatedNodePosition(c.start);
             const endPos = endMachine.getRotatedNodePosition(c.end);
@@ -203,7 +219,6 @@
         placedMachines.forEach(machine => machine.draw(ctx));
 
         if (actionState.type === 'connecting') {
-             // FIX: Find the parent machine for the starting node
             const startMachine = placedMachines.find(m => m.id === actionState.startNode.parentId);
             if(startMachine) {
                 const startPos = startMachine.getRotatedNodePosition(actionState.startNode);
@@ -243,21 +258,22 @@
             sortedBalance.forEach(([item, rate]) => {
                 const color = rate > 0 ? 'text-green-400' : 'text-red-400';
                 const sign = rate > 0 ? '+' : '';
-                html += `<div class="flex justify-between ${color}"><span>${item}</span><span>${sign}${rate.toFixed(1)}</span></div>`;
+                const img = itemImages[item];
+                const iconHtml = img && img.complete ? `<img src="${img.src}" class="w-5 h-5 inline-block mr-2 object-contain">` : `<div class="w-5 h-5 inline-block mr-2 bg-gray-600 rounded-sm"></div>`;
+                html += `<div class="flex justify-between items-center ${color}"><div class="flex items-center">${iconHtml}<span>${item}</span></div><span>${sign}${rate.toFixed(1)}</span></div>`;
             });
         }
         panel.innerHTML = html;
     }
 
     function updatePropertiesPanel() {
-        const panel = document.getElementById('properties-panel');
-        const content = document.getElementById('properties-content');
         if (!selectedItem) {
-            content.innerHTML = '<p class="text-gray-400">Select an item.</p>';
-            panel.classList.add('translate-x-full');
+            propertiesPanel.style.transform = 'translateX(100%)';
+            mainFlexContainer.style.paddingRight = '0';
             return;
         }
 
+        const content = document.getElementById('properties-content');
         if (selectedItem instanceof Machine) {
             let recipeOptions = '<option value="">Select Recipe...</option>';
             if (selectedItem.recipes.length > 0) {
@@ -307,7 +323,8 @@
             updateSummaryPanel();
         };
 
-        panel.classList.remove('translate-x-full');
+        propertiesPanel.style.transform = 'translateX(0)';
+        mainFlexContainer.style.paddingRight = `${propertiesPanel.offsetWidth}px`;
     }
 
     canvas.addEventListener('mousedown', (e) => {
@@ -465,22 +482,28 @@
         e.target.value = '';
     });
 
-    function loadImages(callback) {
+    function loadAllImages(callback) {
+        const machineEntries = Object.entries(machineData).flatMap(([cat, machines]) => Object.entries(machines));
+        const itemEntries = Object.entries(itemData);
         let loadedCount = 0;
-        const allMachines = Object.values(machineData).flatMap(cat => Object.entries(cat));
-        const totalImages = allMachines.length;
+        const totalImages = machineEntries.length + itemEntries.length;
+
         if (totalImages === 0) { callback(); return; }
-        allMachines.forEach(([type, data]) => {
+
+        const loadImage = (src, collection, key) => {
             const img = new Image();
             img.crossOrigin = "anonymous";
-            img.src = data.icon;
-            img.onload = () => { machineImages[type] = img; loadedCount++; if (loadedCount === totalImages) callback(); };
-            img.onerror = () => { console.error(`Failed to load image for ${type}`); machineImages[type] = null; loadedCount++; if (loadedCount === totalImages) callback(); };
-        });
+            img.src = src;
+            img.onload = () => { collection[key] = img; loadedCount++; if (loadedCount === totalImages) callback(); };
+            img.onerror = () => { console.error(`Failed to load image for ${key}`); collection[key] = null; loadedCount++; if (loadedCount === totalImages) callback(); };
+        };
+
+        machineEntries.forEach(([type, data]) => loadImage(data.icon, machineImages, type));
+        itemEntries.forEach(([name, data]) => loadImage(data.icon, itemImages, name));
     }
 
     window.addEventListener('load', () => {
-        loadImages(() => {
+        loadAllImages(() => {
             populateMachineSidebar();
             setTimeout(() => {
                 camera.x = -container.clientWidth / 2;
@@ -490,7 +513,12 @@
             }, 100);
         });
     });
-    window.addEventListener('resize', redrawCanvas);
+    window.addEventListener('resize', () => {
+        redrawCanvas();
+        if (!propertiesPanel.classList.contains('translate-x-full')) {
+             mainFlexContainer.style.paddingRight = `${propertiesPanel.offsetWidth}px`;
+        }
+    });
 
     </script>
 </body>
